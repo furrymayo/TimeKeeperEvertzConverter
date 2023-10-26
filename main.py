@@ -1,18 +1,57 @@
+import requests
 import tkinter as tk
 from tkinter import scrolledtext
+import time
 import socket
-import time  # Importing time for the delay
 
-# Constants for VGPI formatting
-VGPI_ON = "1"
-VGPI_OFF = "0"  # New constant for OFF status
+BASE_URL = "http://127.0.0.1:4000"
 
-def format_vgpi_data(virt_gpi_num, status):
-    return f"%16S{virt_gpi_num}={status}%Z"
+def get_all_rooms():
+    try:
+        response = requests.get(f"{BASE_URL}/api/rooms")
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException:
+        return []
 
-def send_vgpi_to_endpoint(vgpi_id, status, reset=False):
-    data = format_vgpi_data(vgpi_id, status)
+def get_all_timers():
+    try:
+        response = requests.get(f"{BASE_URL}/api/timers")
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException:
+        return []
+
+def calculate_countdown(datetime_epoch):
+    current_time_epoch = int(time.time() * 1000)
+    countdown_millis = datetime_epoch - current_time_epoch
+    hours, remainder = divmod(countdown_millis // 1000, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+def format_umd_data(umd_id, countdown):
+    return f"%{umd_id}D%1S{countdown}%Z"
+
+def process_and_send_data(output_text):
     endpoints = list(endpoints_listbox.get(0, tk.END))
+    rooms = get_all_rooms()
+
+    for room in rooms:
+        room_id_str = room.get('id')  # Assuming room_id is a string like 'room-1'
+        room_number = int(room_id_str.split('-')[1])  # Extract the number after 'room-'
+        base_umd_id = room_number * 10  # Calculate base UMD ID for the room
+
+        timers_for_room = [timer for timer in get_all_timers() if timer.get('roomID') == room_id_str]
+        for index, timer in enumerate(timers_for_room):
+            countdown = calculate_countdown(timer['datetime'])
+            umd_id = base_umd_id + index  # Calculate UMD ID based on the timer's index in the room
+            umd_data = format_umd_data(umd_id, countdown)
+            send_data_to_endpoint(umd_data, timer, endpoints, output_text)
+
+
+
+def send_data_to_endpoint(data, raw_data, endpoints, output_text):
+    output_text.insert(tk.END, f"Raw data: {raw_data}\n")
     for endpoint in endpoints:
         try:
             # Parse the endpoint to extract host and port
@@ -29,22 +68,30 @@ def send_vgpi_to_endpoint(vgpi_id, status, reset=False):
             output_text.insert(tk.END, f"Failed to send data to {endpoint}. Error: {e}\n")
     output_text.see(tk.END)
 
-    # If reset is True, send a reset command after a short delay
-    if reset:
-        time.sleep(0.5)  # Delay for half a second
-        send_vgpi_to_endpoint(vgpi_id, VGPI_OFF)
+
+should_continue = False
+
+def push_data_loop():
+    global should_continue, output_text
+    if not should_continue:
+        return
+
+    try:
+        process_and_send_data(output_text)
+    except Exception as e:
+        output_text.insert(tk.END, f"An error occurred: {e}\n")
+    finally:
+        root.after(1000, push_data_loop)  # Increase delay to 1 second
 
 def start_pushing():
-    vgpi_id = int(start_vgpi_entry.get())
-    send_vgpi_to_endpoint(vgpi_id, VGPI_ON, reset=True)
+    global should_continue, base_url_entry, BASE_URL
+    BASE_URL = base_url_entry.get()
+    should_continue = True
+    push_data_loop()
 
 def stop_pushing():
-    vgpi_id = int(stop_vgpi_entry.get())
-    send_vgpi_to_endpoint(vgpi_id, VGPI_ON, reset=True)
-
-def reset_pushing():
-    vgpi_id = int(reset_vgpi_entry.get())
-    send_vgpi_to_endpoint(vgpi_id, VGPI_ON, reset=True)
+    global should_continue
+    should_continue = False
 
 def add_endpoint():
     try:
@@ -53,43 +100,32 @@ def add_endpoint():
             endpoints_listbox.insert(tk.END, endpoint)
             endpoint_entry.delete(0, tk.END)
     except Exception as e:
-        output_text.insert(tk.END, f"Error adding endpoint: {e}\n")
+        print(f"Error adding endpoint: {e}")
+
 
 def remove_endpoint():
     try:
         index = endpoints_listbox.curselection()[0]
         endpoints_listbox.delete(index)
     except IndexError:
-        output_text.insert(tk.END, f"Error removing endpoint: No endpoint selected\n")
+        pass
 
 def clear_endpoints():
     endpoints_listbox.delete(0, tk.END)
 
 def gui():
-    global root, output_text, endpoints_listbox, endpoint_entry
-    global start_vgpi_entry, stop_vgpi_entry, reset_vgpi_entry
-
+    global root, base_url_entry, output_text, endpoints_listbox, endpoint_entry
     root = tk.Tk()
     root.title("API Data Processor")
+
+    tk.Label(root, text="Base URL:").pack(pady=10)
+    base_url_entry = tk.Entry(root, width=40)
+    base_url_entry.pack(pady=10)
+    base_url_entry.insert(0, BASE_URL)
 
     tk.Label(root, text="Endpoint:").pack(pady=10)
     endpoint_entry = tk.Entry(root, width=40)
     endpoint_entry.pack(pady=10)
-
-    tk.Label(root, text="Start VGPI ID:").pack(pady=10)
-    start_vgpi_entry = tk.Entry(root, width=40)
-    start_vgpi_entry.pack(pady=10)
-    start_vgpi_entry.insert(0, "1")
-
-    tk.Label(root, text="Stop VGPI ID:").pack(pady=10)
-    stop_vgpi_entry = tk.Entry(root, width=40)
-    stop_vgpi_entry.pack(pady=10)
-    stop_vgpi_entry.insert(0, "2")
-
-    tk.Label(root, text="Reset VGPI ID:").pack(pady=10)
-    reset_vgpi_entry = tk.Entry(root, width=40)
-    reset_vgpi_entry.pack(pady=10)
-    reset_vgpi_entry.insert(0, "3")
 
     add_button = tk.Button(root, text="Add Endpoint", command=add_endpoint)
     add_button.pack(pady=5)
@@ -108,9 +144,6 @@ def gui():
 
     stop_button = tk.Button(root, text="Stop", command=stop_pushing)
     stop_button.pack(pady=10)
-
-    reset_button = tk.Button(root, text="Reset", command=reset_pushing)
-    reset_button.pack(pady=10)
 
     tk.Label(root, text="Real-time Data Output:").pack(pady=10)
     output_text = scrolledtext.ScrolledText(root, width=60, height=10)

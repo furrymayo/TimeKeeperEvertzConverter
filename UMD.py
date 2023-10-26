@@ -29,12 +29,25 @@ def calculate_countdown(datetime_epoch):
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02}:{minutes:02}:{seconds:02}"
 
-# Constants for VGPI formatting
-VGPI_ON = "1"
-VGPI_OFF = "0"
+def format_umd_data(umd_id, countdown):
+    return f"%{umd_id}D%1S{countdown}%Z"
 
-def format_vgpi_data(virt_gpi_num, status):
-    return f"%16S{virt_gpi_num}={status}%Z"
+def process_and_send_data(output_text):
+    endpoints = list(endpoints_listbox.get(0, tk.END))
+    rooms = get_all_rooms()
+
+    for room in rooms:
+        room_id_str = room.get('id')  # Assuming room_id is a string like 'room-1'
+        room_number = int(room_id_str.split('-')[1])  # Extract the number after 'room-'
+        base_umd_id = room_number * 10  # Calculate base UMD ID for the room
+
+        timers_for_room = [timer for timer in get_all_timers() if timer.get('roomID') == room_id_str]
+        for index, timer in enumerate(timers_for_room):
+            countdown = calculate_countdown(timer['datetime'])
+            umd_id = base_umd_id + index  # Calculate UMD ID based on the timer's index in the room
+            umd_data = format_umd_data(umd_id, countdown)
+            send_data_to_endpoint(umd_data, timer, endpoints, output_text)
+
 
 
 def send_data_to_endpoint(data, raw_data, endpoints, output_text):
@@ -54,19 +67,6 @@ def send_data_to_endpoint(data, raw_data, endpoints, output_text):
         except Exception as e:
             output_text.insert(tk.END, f"Failed to send data to {endpoint}. Error: {e}\n")
     output_text.see(tk.END)
-
-def process_and_send_data(output_text):
-    endpoints = list(endpoints_listbox.get(0, tk.END))
-    rooms = get_all_rooms()
-
-    for room in rooms:
-        room_id = room.get('id')
-        timers_for_room = [timer for timer in get_all_timers() if timer.get('roomID') == room_id]
-        for timer in timers_for_room:
-            countdown = calculate_countdown(timer['datetime'])
-            status = VGPI_ON if countdown != "00:00:00" else VGPI_OFF  # Example logic, adjust as needed
-            vgpi_data = format_vgpi_data(room_id, status)  # Using room_id as virtual GPI number for this example
-            send_data_to_endpoint(vgpi_data, timer, endpoints, output_text)
 
 
 should_continue = False
